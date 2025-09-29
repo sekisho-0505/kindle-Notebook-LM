@@ -1,0 +1,2 @@
+# kindle-Notebook-LM
+kindleからスクリーンショットを自動で撮ってGoogle docsにアップロードするのを目標

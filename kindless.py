@@ -110,7 +110,7 @@ def capture(cfg: KindleSSConfig, dir_title: str, page: int):
     left_bound = cfg.left_margin
     right_bound = imp.shape[1] - cfg.right_margin
     lft = cmps(imp, range(left_bound, right_bound), left_bound)
-    rft = cmps(imp, reversed(range(left_bound, right_bound)), right_bound)
+    rht = cmps(imp, reversed(range(left_bound, right_bound)), right_bound)
     if rht <= lft:
         #フォールバック：全幅扱い
         lft, rht = 0, imp.shape[1]

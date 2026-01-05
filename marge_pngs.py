@@ -6,11 +6,13 @@ def pngs_in(dirpath: Path):
     return natsort.natsorted(dirpath.glob("*.png"), key=lambda p: p.name)
 
 def merge_folder(folder: Path):
+    out = folder / f"{folder.name}.pdf"
+    if out.exists():
+        return 0, f"SKIP: PDF既存 {out.name}"
     pngs = pngs_in(folder)
     if not pngs:
         return 0, f"SKIP: 画像なし {folder}"
     images = [Image.open(p).convert("RGB") for p in pngs]
-    out = folder / f"{folder.name}.pdf"
     images[0].save(out, save_all=True, append_images=images[1:])
     return len(images), f"DONE: {out.name} ({len(images)}ページ)"
 

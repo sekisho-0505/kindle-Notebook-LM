@@ -11,7 +11,6 @@ Kindle 書籍のスクリーンショット取得と、PDF を OCR して Google
 | `WindowInfo.py` | Windows API を呼び出して Kindle ウィンドウのハンドルや情報を取得 |
 | `wxdialog.py` | ユーザー入力・メッセージ表示用の簡易ダイアログラッパー |
 | `kindless.ini` | Kindle キャプチャ機能の設定ファイル |
-| `main.py` | PDF → 画像変換 → OCR → Markdown/HTML 化 → Google ドキュメントアップロードを行うスクリプト |
 
 ## 必要環境
 
@@ -52,16 +51,14 @@ Kindle のキャプチャ取得から OCR・Google ドキュメント反映ま�
 2 つのスクリプトを順番に（または必要な方だけを）実行します。
 
 1. `kindless.py` – Kindle for PC からページ送りしながらスクリーンショットを保存
-2. `main.py` – 取得済みの PDF（もしくはキャプチャから生成した PDF）を OCR し、Google ドキュメントへアップロード
-
+2. `marge_pngs.py` – 保存したスクリーンショットをPDF化する。
+※`kindless.ini` - nextpage_keyでページめくりの左右を調整
 > キャプチャ画像から PDF を作成する工程は本リポジトリには含まれていないため、必要に応じて外部ツールで PDF 化してください。
 
 ### 実行順序の例
 
-- **キャプチャから Google ドキュメントまで行いたい場合**: `kindless.py` を実行して画像を揃え、任意の方法で PDF 化した後、`main.py`
-  を実行します。
 - **キャプチャのみ必要な場合**: `kindless.py` のみを実行します。
-- **OCR・アップロードのみ必要な場合**: 既に用意済みの PDF を `main.py` で処理します。
+
 
 ※main.pyは削除済み。
 kindless.pyを使用する際には名前入力画面になった際に全画面表示にしてからOKボタンを押下する必要がある。
@@ -84,25 +81,6 @@ kindless.pyを使用する際には名前入力画面になった際に全画面
 - `grayscale_threshold`: グレースケール判定の閾値。カラーとモノクロを分けて保存したい場合に調整します。
 - `base_save_folder`: スクリーンショットを保存するベースディレクトリ。書籍ごとにサブフォルダが作成されます。
 
-## PDF → OCR → Google ドキュメント ワークフロー
-
-`main.py` では以下の流れを自動化しています。
-
-1. **PDF をページごとの PNG 画像へ変換** – `pdf2image.convert_from_path` を利用し、`_tmp_ocr` ディレクトリに出力します。
-2. **画像を前処理して OCR** – `Pillow` でグレースケール化・コントラスト調整・軽微なシャープ処理を行い、`pytesseract` で縦書き日本語 (`LANG = "jpn_vert"`) を認識します。
-3. **Markdown 生成** – ページごとに Markdown セクションへまとめ、箇条書き風の記号を自動的にリスト化します。
-4. **Markdown を HTML に変換** – `markdown` パッケージで HTML に変換し、Google ドライブにアップロードしやすい形式に整えます。
-5. **Google ドキュメントへアップロード** – Drive API を用いて HTML ファイルをアップロードし、自動的に Google ドキュメントへ変換します。
-
-実行は以下のコマンドで行います。
-
-```bash
-python main.py
-```
-
-必要に応じて `PDF_PATH`、`DOC_TITLE`、`LANG`、`PSM`（Tesseract のページ分割モード）などを編集してください。実行中は各ステップの進捗がコンソールに表示され、最後に作成された Google ドキュメントの URL が出力されます。
-
-## トラブルシューティング
 
 - **Kindle ウィンドウを検出できない**: `kindless.ini` の `window_title` と `execute_filename` を確認し、管理者権限で Kindle を起動してみてください。
 - **Poppler が見つからないエラー**: `pdf2image` は Poppler に依存します。`pdftoppm.exe` が PATH に入っているか確認します。

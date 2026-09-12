@@ -17,5 +17,11 @@ echo.
 python marge_pngs.py
 echo.
 echo ----------------------------------------
-echo 終了しました。Enter キーでこの画面を閉じます。
+if errorlevel 1 (
+  echo [失敗] エラーで終了しました。上に出ている ERROR の行を確認してください。
+) else (
+  echo [成功] 正常に終了しました。
+)
+echo.
+echo Enter キーでこの画面を閉じます。
 pause > nul

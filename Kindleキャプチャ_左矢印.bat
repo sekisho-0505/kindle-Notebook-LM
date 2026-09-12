@@ -15,9 +15,16 @@ echo  Kindle キャプチャ（左矢印でページ送り）
 echo ========================================
 echo.
 echo Kindle for PC で本を開いた状態で実行してください。
+echo キャプチャ後、そのまま OCR して PDF まで作ります。
 echo.
-python kindless.py --direction left
+python kindless.py --direction left --ocr
 echo.
 echo ----------------------------------------
-echo 終了しました。Enter キーでこの画面を閉じます。
+if errorlevel 1 (
+  echo [失敗] エラーで終了しました。上に出ている ERROR の行を確認してください。
+) else (
+  echo [成功] 正常に終了しました。
+)
+echo.
+echo Enter キーでこの画面を閉じます。
 pause > nul

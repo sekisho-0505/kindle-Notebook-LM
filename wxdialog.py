@@ -29,9 +29,12 @@ class SimpleDialog:
         return r
 
     @staticmethod
-    def infomation(parent = None, title="", label="", icon=Icon.Information)-> bool:
+    def information(parent = None, title="", label="", icon=Icon.Information)-> bool:
         dlg = wx.MessageDialog(None, label, title, wx.OK | icon.value)
         dlg.WindowStyle |= wx.STAY_ON_TOP
         dlg.ShowModal()
         dlg.Destroy()
         return True
+
+    #旧名(綴り間違い)も残しておく
+    infomation = information

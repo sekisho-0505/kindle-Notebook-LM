@@ -10,6 +10,7 @@
 """
 
 import configparser
+import io
 import os
 import re
 import shutil
@@ -19,6 +20,7 @@ from pathlib import Path
 
 import fitz  # PyMuPDF
 import natsort
+import numpy as np
 import pytesseract
 from PIL import Image
 from pytesseract import Output
@@ -57,6 +59,80 @@ _GLYPH_EM = 0.5      # 透明フォント1文字ぶんの幅(em)
 _TOO_WIDE = 2.5      # 次の文字までの距離に対し、この倍率より広い文字幅は異常とみなす
 _TOO_NARROW = 0.4    # 同じく、この倍率より狭い文字幅は異常とみなす
 # ----------------------------------------------------------------------
+
+
+# --- 画面の左右にできる黒帯を取り除くための設定 -------------------------
+# 縦長のページを横長の画面に表示すると、左右に黒い帯ができる。
+# 帯が付いたまま OCR に渡すと Tesseract のレイアウト解析が失敗し、
+# ページによっては文字がまったく読めなくなる(実測: 0文字 → 1939文字)。
+_BRIGHT_LEVEL = 200    # これより明るい画素を「ページの一部」とみなす
+_BRIGHT_RATIO = 0.05   # 列(行)のうちこの割合以上が明るければページ部分と判断
+_TRIM_MARGIN = 6       # 切り出しに少しだけ余白を残す
+
+# 小さく表示されたページは、拡大してから OCR すると精度が上がる
+# (実測: 517文字 → 1079文字)。ただし拡大した画像をそのまま PDF に入れると
+# 容量とページ寸法が倍になるため、OCR 後に元の大きさの画像へ差し替える。
+_OCR_TARGET_WIDTH = 1800   # OCR に渡したい画像の横幅の目安
+_OCR_MAX_SCALE = 2         # 拡大は最大 2 倍まで
+_OCR_BASE_DPI = 96         # ページ寸法を一定にするため解像度を明示する
+# ----------------------------------------------------------------------
+
+
+def _bright_box(image: Image.Image) -> tuple[int, int, int, int] | None:
+    """1 枚の画像から、黒帯を除いた「ページ部分」の範囲を求める。"""
+    bright = np.asarray(image.convert("L")) > _BRIGHT_LEVEL
+    cols = np.where(bright.mean(axis=0) > _BRIGHT_RATIO)[0]
+    rows = np.where(bright.mean(axis=1) > _BRIGHT_RATIO)[0]
+    if len(cols) == 0 or len(rows) == 0:
+        return None
+    return int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1
+
+
+def find_page_box(pngs: list[Path]) -> tuple[int, int, int, int] | None:
+    """本の全ページを見て、共通で使える「ページ部分」の範囲を決める。
+
+    ページごとに切り出すと、ほぼ白紙のページで切りすぎて PDF のページ寸法が
+    不揃いになる。全ページの範囲を合わせた(union)ものを使えば、
+    どのページも欠けず、寸法も揃う。黒帯が無ければ None を返す。
+    """
+    left = top = None
+    right = bottom = 0
+    width = height = 0
+    try:
+        for path in pngs:
+            with Image.open(path) as image:
+                width, height = image.size
+                box = _bright_box(image)
+            if box is None:
+                continue
+            left = box[0] if left is None else min(left, box[0])
+            top = box[1] if top is None else min(top, box[1])
+            right = max(right, box[2])
+            bottom = max(bottom, box[3])
+    except Exception as e:
+        print(f"  WARNING: ページ範囲を調べられませんでした ({e})")
+        return None
+    if left is None or width == 0:
+        return None
+
+    left = max(left - _TRIM_MARGIN, 0)
+    top = max(top - _TRIM_MARGIN, 0)
+    right = min(right + _TRIM_MARGIN, width)
+    bottom = min(bottom + _TRIM_MARGIN, height)
+    box_w, box_h = right - left, bottom - top
+    #ほとんど削れない場合と、削りすぎになる場合は切り出さない
+    if box_w * box_h > width * height * 0.98:
+        return None
+    if box_w < width * 0.2 or box_h < height * 0.2:
+        return None
+    return left, top, right, bottom
+
+
+def crop_page(image: Image.Image, box: tuple[int, int, int, int] | None) -> Image.Image:
+    """求めた範囲でページを切り出す(範囲が無ければそのまま)。"""
+    if box is None:
+        return image
+    return image.crop(box)
 
 
 def resolve_base_dir() -> Path:
@@ -135,21 +211,60 @@ def has_text_layer(pdf_path: Path) -> bool:
     return False
 
 
-def ocr_page(png_path: Path, lang: str, config: str = "") -> bytes:
+def scale_for_ocr(width: int) -> int:
+    """小さいページを何倍に拡大して OCR するかを決める。"""
+    if width <= 0:
+        return 1
+    return max(1, min(_OCR_MAX_SCALE, round(_OCR_TARGET_WIDTH / width)))
+
+
+def _restore_image_size(pdf_bytes: bytes, image: Image.Image) -> bytes:
+    """PDF に埋め込まれた拡大画像を、元の大きさの画像へ差し替える。"""
+    try:
+        buf = io.BytesIO()
+        image.save(buf, format="PNG", optimize=True)
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        for page in doc:
+            for xref, *_ in page.get_images():
+                page.replace_image(xref, stream=buf.getvalue())
+        #不要になった拡大画像は、本にまとめるとき(insert_pdf)に自動で捨てられる
+        out = doc.tobytes(deflate=True)
+        doc.close()
+        return out
+    except Exception as e:
+        print(f"  WARNING: 画像の差し替えをスキップしました ({e})")
+        return pdf_bytes
+
+
+def ocr_page(png_path: Path, lang: str, config: str = "", box=None) -> bytes:
     """1 ページ分の PNG を OCR し、テキスト付き 1 ページ PDF のバイト列を返す。"""
     with Image.open(png_path) as image:
-        return pytesseract.image_to_pdf_or_hocr(image, extension="pdf", lang=lang, config=config)
+        page = crop_page(image, box)
+        scale = scale_for_ocr(page.width)
+        target = page if scale == 1 else page.resize(
+            (page.width * scale, page.height * scale), Image.LANCZOS)
+        #解像度を明示して、拡大してもページの大きさが変わらないようにする
+        full_config = f"{config} --dpi {_OCR_BASE_DPI * scale}".strip()
+        pdf_bytes = pytesseract.image_to_pdf_or_hocr(
+            target, extension="pdf", lang=lang, config=full_config)
+        if scale == 1:
+            return pdf_bytes
+        return _restore_image_size(pdf_bytes, page)
 
 
-def _mean_confidence(png_path: Path, lang: str, config: str) -> float:
+def _mean_confidence(png_path: Path, lang: str, config: str, box=None) -> float:
     """1 ページを試し読みして、認識の確からしさ(0-100)の平均を返す。"""
     with Image.open(png_path) as image:
-        data = pytesseract.image_to_data(image, lang=lang, config=config, output_type=Output.DICT)
+        page = crop_page(image, box)
+        scale = scale_for_ocr(page.width)
+        if scale != 1:
+            page = page.resize((page.width * scale, page.height * scale), Image.LANCZOS)
+        data = pytesseract.image_to_data(page, lang=lang, config=config, output_type=Output.DICT)
     scores = [int(c) for t, c in zip(data["text"], data["conf"]) if t.strip() and int(c) >= 0]
     return sum(scores) / len(scores) if scores else 0.0
 
 
-def detect_direction(pngs: list[Path], lang: str, vertical_lang: str | None) -> tuple[str, str]:
+def detect_direction(pngs: list[Path], lang: str, vertical_lang: str | None, box=None) -> tuple[str, str]:
     """本の中ほどを試し読みして、横書き用と縦書き用のどちらで読むかを決める。"""
     if not vertical_lang:
         return lang, ""
@@ -157,8 +272,8 @@ def detect_direction(pngs: list[Path], lang: str, vertical_lang: str | None) -> 
     positions = sorted({len(pngs) * 2 // 5, len(pngs) * 3 // 5})
     samples = [pngs[i] for i in positions]
     try:
-        h = sum(_mean_confidence(p, lang, "") for p in samples) / len(samples)
-        v = sum(_mean_confidence(p, vertical_lang, VERTICAL_CONFIG) for p in samples) / len(samples)
+        h = sum(_mean_confidence(p, lang, "", box) for p in samples) / len(samples)
+        v = sum(_mean_confidence(p, vertical_lang, VERTICAL_CONFIG, box) for p in samples) / len(samples)
     except Exception as e:
         print(f"  WARNING: 書き方向を判定できませんでした ({e})。横書きとして進めます。")
         return lang, ""
@@ -247,7 +362,13 @@ def merge_folder(folder: Path, lang: str, vertical_lang: str | None, no_text_pdf
 
     total = len(pngs)
     print(f"{total} PNG files found.")
-    ocr_lang, ocr_config = detect_direction(pngs, lang, vertical_lang)
+    print("ページ範囲を確認中...", end=" ", flush=True)
+    box = find_page_box(pngs)
+    if box:
+        print(f"左右上下の黒帯を除去します ({box[2]-box[0]} x {box[3]-box[1]})")
+    else:
+        print("黒帯なし")
+    ocr_lang, ocr_config = detect_direction(pngs, lang, vertical_lang, box)
     print()
 
     start = time.perf_counter()
@@ -262,7 +383,7 @@ def merge_folder(folder: Path, lang: str, vertical_lang: str | None, no_text_pdf
                 per_page = (time.perf_counter() - start) / (index - 1)
                 remain = f"   残り約 {format_elapsed(per_page * (total - index + 1))}"
             print(f"OCR {index}/{total} : {png.name}{remain}", flush=True)
-            with fitz.open(stream=ocr_page(png, ocr_lang, ocr_config), filetype="pdf") as page_pdf:
+            with fitz.open(stream=ocr_page(png, ocr_lang, ocr_config, box), filetype="pdf") as page_pdf:
                 fix_japanese_spacing(page_pdf)
                 book.insert_pdf(page_pdf)
     except Exception as e:
@@ -277,7 +398,7 @@ def merge_folder(folder: Path, lang: str, vertical_lang: str | None, no_text_pdf
     # 途中で失敗しても壊れた PDF を残さないよう、一時ファイルに書いてから置き換える
     tmp = folder / f"{folder.name}.pdf.tmp"
     try:
-        book.save(tmp, deflate=True, garbage=3)
+        book.save(tmp, deflate=True, garbage=4)
         book.close()
         os.replace(tmp, out)
     finally:

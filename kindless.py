@@ -2,6 +2,7 @@ from dataclass import KindleSSConfig, read_config
 from wxdialog import SimpleDialog, Icon
 from WindowInfo import GetWindowHandleWithName, SetForeWindow, GetWindowText
 
+import argparse
 import threading, queue
 import sys, os, os.path as osp, datetime , time
 import shutil
@@ -217,13 +218,24 @@ def thread(cv: threading.Condition, que: queue.Queue, trm: Margin, gray: Margin,
                 cv.wait()
 
 
-def main():
-    if len(sys.argv) >= 2:
-        ini = sys.argv[1]
-    else:
-        ini = 'kindless.ini'
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    #従来どおり ini ファイル名も指定できる(省略時は kindless.ini)
+    parser = argparse.ArgumentParser(description='Kindle for PC の画面を連続キャプチャします')
+    parser.add_argument('ini', nargs='?', default='kindless.ini',
+                        help='設定ファイル (省略時: kindless.ini)')
+    parser.add_argument('--direction', choices=['right', 'left'], default=None,
+                        help='ページ送りに押す矢印キー。省略時は ini の nextpage_key を使う')
+    return parser.parse_args(argv)
 
-    cfg : KindleSSConfig = read_config(KindleSSConfig(), ini)
+
+def main():
+    args = parse_args(sys.argv[1:])
+
+    cfg : KindleSSConfig = read_config(KindleSSConfig(), args.ini)
+    if args.direction:
+        #実行時の指定を優先する(ini は書き換えない)
+        cfg.nextpage_key = args.direction
+    print('ページ送りキー:', cfg.nextpage_key)
     ghwnd = GetWindowHandleWithName(cfg.window_title, cfg.execute_filename)
     if ghwnd == None:
         SimpleDialog.information(title="エラー", label="Kindleが見つかりません", icon=Icon.Exclamation)

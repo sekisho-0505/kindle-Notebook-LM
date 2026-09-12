@@ -1,0 +1,13 @@
+# インストール方法:  pip install -r requirements.txt
+
+# --- Kindle キャプチャ (kindless.py) 用 ---
+pyautogui
+opencv-python
+numpy
+wxPython
+
+# --- OCR 付き PDF 作成 (marge_pngs.py) 用 ---
+pytesseract
+pymupdf
+natsort
+pillow

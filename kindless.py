@@ -223,6 +223,12 @@ def thread(cv: threading.Condition, que: queue.Queue, trm: Margin, gray: Margin,
 app_name_list = ['Kindle', 'Kindle for PC', 'Kindle for Windows', 'Amazon Kindle']
 
 
+#保存先フォルダの外を指す名前が入力されたときの案内
+unsafe_title_label = """そのタイトルは保存先フォルダの外を指してしまうため使えません。
+
+別のタイトルを入力して、もう一度実行してください。"""
+
+
 #Kindle のウィンドウが見つからないときの案内
 kindle_not_found_label = """Kindle のウィンドウが見つかりません。
 
@@ -269,6 +275,13 @@ def is_fullscreen(hwnd) -> bool:
     return (right - left) >= sc_w and (bottom - top) >= sc_h
 
 
+def is_inside(base: str, target: str) -> bool:
+    """target が base フォルダの内側を指しているか(保存先の外を操作しないための確認)。"""
+    base_abs = osp.normcase(osp.abspath(base))
+    target_abs = osp.normcase(osp.abspath(target))
+    return target_abs.startswith(base_abs + os.sep)
+
+
 def resolve_folder_name(entered: str) -> tuple[str, bool]:
     """入力されたタイトルから、保存フォルダ名と追記フラグ(+)を決める。
 
@@ -280,7 +293,11 @@ def resolve_folder_name(entered: str) -> tuple[str, bool]:
     if append:
         title = title[1:]
     title = sanitize_title(title)
-    if not title:
+    #Windows はフォルダ名末尾の「.」と空白を扱えない
+    title = title.rstrip(' .')
+    #空、空白のみ、「.」「..」のようにドットだけの名前は、保存先の外や
+    #保存先そのものを指してしまうため使わない(削除事故になる)
+    if not title.strip(' .'):
         return datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S"), False
     return title, append
 
@@ -377,6 +394,13 @@ def main():
     book_title, append = resolve_folder_name(book_title)
 
     dir_title = osp.join(cfg.base_save_folder,book_title)
+    if not is_inside(cfg.base_save_folder, dir_title):
+        #ここに来るのは想定外だが、保存先の外を削除しないよう必ず止める
+        if entered_fullscreen:
+            pag.press(cfg.fullscreen_key)
+            time.sleep(cfg.long_wait)
+        SimpleDialog.information(title="エラー", label=unsafe_title_label, icon=Icon.Exclamation)
+        sys.exit()
     print(dir_title)
     page = 1
     if osp.exists(dir_title):

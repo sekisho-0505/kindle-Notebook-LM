@@ -1,6 +1,7 @@
 from dataclass import KindleSSConfig, read_config
 from wxdialog import SimpleDialog, Icon
-from WindowInfo import GetWindowHandleWithName, SetForeWindow, GetWindowText
+from WindowInfo import (GetWindowHandleWithName, GetVisibleWindowHandleWithName,
+                        SetForeWindow, GetWindowText, GetWindowRect)
 
 import argparse
 import threading, queue
@@ -218,6 +219,102 @@ def thread(cv: threading.Condition, que: queue.Queue, trm: Margin, gray: Margin,
                 cv.wait()
 
 
+#ウィンドウタイトルに現れるアプリ名(書名ではないと判断するための一覧)
+app_name_list = ['Kindle', 'Kindle for PC', 'Kindle for Windows', 'Amazon Kindle']
+
+
+#Kindle のウィンドウが見つからないときの案内
+kindle_not_found_label = """Kindle のウィンドウが見つかりません。
+
+Kindle for PC を起動し、最小化されていない状態にしてから
+もう一度実行してください。"""
+
+
+#タイトルを自動取得できなかったときにダイアログへ出す案内
+manual_title_label = """タイトルを自動取得できませんでした。
+本のタイトルを入力してください。
+(空のままだと日付がフォルダ名になります)"""
+
+
+def extract_book_title(window_text: str) -> str:
+    """ウィンドウタイトルから書名を取り出す。取り出せなければ空文字を返す。
+
+    旧 Kindle for PC は「〇〇 - 書名」の形式でタイトルに書名が入っていたが、
+    Microsoft Store 版の新しい Kindle アプリはタイトルが「Kindle」固定で
+    書名が入らない。その場合は空文字を返し、呼び出し側で手入力してもらう。
+    """
+    text = window_text.strip()
+    for sep in (' - ', ' – ', ' — ', ' | '):
+        if sep in text:
+            before, _, after = text.partition(sep)
+            #従来どおり区切りの後ろを書名とみなす。後ろがアプリ名なら前を使う。
+            for candidate in (after.strip(), before.strip()):
+                if candidate and candidate not in app_name_list:
+                    return candidate
+            return ''
+    return '' if text in app_name_list else text
+
+
+def sanitize_title(title: str) -> str:
+    """フォルダ名に使えない文字を全角などに置き換える。"""
+    for i in rep_list:
+        title = title.replace(i[0], i[1])
+    return title.strip()
+
+
+def is_fullscreen(hwnd) -> bool:
+    """ウィンドウが画面全体を覆っているか(最大化とは区別する)。"""
+    left, top, right, bottom = GetWindowRect(hwnd)
+    sc_w, sc_h = pag.size()
+    return (right - left) >= sc_w and (bottom - top) >= sc_h
+
+
+def resolve_folder_name(entered: str) -> tuple[str, bool]:
+    """入力されたタイトルから、保存フォルダ名と追記フラグ(+)を決める。
+
+    空のまま OK されると保存先フォルダ自体を削除してしまうため、
+    必ず何らかの名前を返す(最後の手段として日付を使う)。
+    """
+    title = (entered or '').strip()
+    append = title.startswith('+')
+    if append:
+        title = title[1:]
+    title = sanitize_title(title)
+    if not title:
+        return datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S"), False
+    return title, append
+
+
+def run_ocr(dir_title: str, rebuild: bool) -> bool:
+    """キャプチャした本だけを OCR して PDF を作る(--ocr 指定時)。成功なら True。"""
+    from pathlib import Path
+    import marge_pngs                      #OCR を使うときだけ読み込む
+
+    folder = Path(dir_title)
+    out = folder / (folder.name + '.pdf')
+    print()
+    print('=' * 40)
+    print('続けて OCR して PDF を作ります')
+    print('=' * 40)
+    print()
+    if rebuild and out.exists():
+        #追記した場合、既存 PDF はページが足りないので作り直す
+        print('ページを追記したため、古い PDF を作り直します:', out.name)
+        out.unlink()
+    try:
+        lang, vertical_lang = marge_pngs.check_tesseract()
+        return marge_pngs.merge_folder(folder, lang, vertical_lang, [])
+    except SystemExit:
+        print()
+        print('PNG の保存は完了しています。')
+        print('Tesseract を用意してから OCR_PDF作成.bat を実行すれば PDF を作れます。')
+    except Exception as e:
+        print()
+        print('OCR に失敗しました:', e)
+        print('PNG の保存は完了しています。OCR_PDF作成.bat でやり直せます。')
+    return False
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     #従来どおり ini ファイル名も指定できる(省略時は kindless.ini)
     parser = argparse.ArgumentParser(description='Kindle for PC の画面を連続キャプチャします')
@@ -225,6 +322,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         help='設定ファイル (省略時: kindless.ini)')
     parser.add_argument('--direction', choices=['right', 'left'], default=None,
                         help='ページ送りに押す矢印キー。省略時は ini の nextpage_key を使う')
+    parser.add_argument('--ocr', action='store_true',
+                        help='キャプチャ完了後に、その本だけ OCR して PDF を作る')
     return parser.parse_args(argv)
 
 
@@ -236,20 +335,20 @@ def main():
         #実行時の指定を優先する(ini は書き換えない)
         cfg.nextpage_key = args.direction
     print('ページ送りキー:', cfg.nextpage_key)
-    ghwnd = GetWindowHandleWithName(cfg.window_title, cfg.execute_filename)
+    #非表示のまま残っている古いウィンドウを掴まないよう、表示中のものから選ぶ
+    ghwnd = GetVisibleWindowHandleWithName(cfg.window_title, cfg.execute_filename)
     if ghwnd == None:
-        SimpleDialog.information(title="エラー", label="Kindleが見つかりません", icon=Icon.Exclamation)
+        SimpleDialog.information(title="エラー", label=kindle_not_found_label, icon=Icon.Exclamation)
         sys.exit()
+    print('対象ウィンドウ:', GetWindowText(ghwnd))
 
-    t = GetWindowText(ghwnd)
-    if (idx := t.find(' - ')) != -1:
-        t = t[idx + 3 :]
-        for i in rep_list:
-            t = t.replace(i[0],i[1])
-    else:
-        t = str(datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S"))
+    t = sanitize_title(extract_book_title(GetWindowText(ghwnd)))
     if not cfg.auto_title:
         t = ''
+    if t:
+        dialog_label = "タイトルを確認してください"
+    else:
+        dialog_label = manual_title_label
     SetForeWindow(ghwnd)
     time.sleep(cfg.short_wait)
     if cfg.force_move_first_page:
@@ -259,19 +358,23 @@ def main():
         pag.press('enter')
         time.sleep(cfg.capture_wait)
 
-    pag.press(cfg.fullscreen_key)
-    time.sleep(cfg.long_wait)
+    #すでに全画面ならキーを押さない(押すと逆に解除されてしまう)
+    entered_fullscreen = not is_fullscreen(ghwnd)
+    if entered_fullscreen:
+        pag.press(cfg.fullscreen_key)
+        time.sleep(cfg.long_wait)
+    if not is_fullscreen(ghwnd):
+        print('WARNING: 全画面になりませんでした。手動で全画面にしてから OK を押してください。')
 
     sc_w, sc_h = pag.size()
     pag.moveTo(sc_w / 2, sc_h / 2)
-    ok, book_title = SimpleDialog.askstring(title="タイトル入力", label="タイトルを入れてね",value= t, width=400)
+    ok, book_title = SimpleDialog.askstring(title="タイトル入力", label=dialog_label, value=t, width=400)
     if not ok:
-        pag.press(cfg.fullscreen_key)
-        time.sleep(cfg.long_wait)
+        if entered_fullscreen:
+            pag.press(cfg.fullscreen_key)
+            time.sleep(cfg.long_wait)
         sys.exit()
-    append = book_title.startswith('+') if book_title else False
-    if append:
-        book_title = book_title[1:]
+    book_title, append = resolve_folder_name(book_title)
 
     dir_title = osp.join(cfg.base_save_folder,book_title)
     print(dir_title)
@@ -284,20 +387,24 @@ def main():
             shutil.rmtree(dir_title)
             os.makedirs(dir_title)
         else:
-            pag.press(cfg.fullscreen_key)
-            time.sleep(cfg.long_wait)
+            if entered_fullscreen:
+                pag.press(cfg.fullscreen_key)
+                time.sleep(cfg.long_wait)
             SimpleDialog.information(title="エラー", label="ディレクトリが存在します", icon=Icon.Exclamation)
             sys.exit()
     else:
         try:
             os.makedirs(dir_title)
         except OSError as e:
-            pag.press(cfg.fullscreen_key)
-            time.sleep(cfg.long_wait)
+            if entered_fullscreen:
+                pag.press(cfg.fullscreen_key)
+                time.sleep(cfg.long_wait)
             SimpleDialog.information(title="エラー", label="ディレクトリが作成できませんでした", icon=Icon.Exclamation)
             sys.exit()
     time.sleep(cfg.fullscreen_wait)
     capture(cfg, dir_title, page)
+    if args.ocr and not run_ocr(dir_title, rebuild=append):
+        sys.exit(1)
 
 
 if __name__ == "__main__":

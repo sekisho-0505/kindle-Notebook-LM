@@ -256,7 +256,12 @@ def merge_folder(folder: Path, lang: str, vertical_lang: str | None, no_text_pdf
     try:
         for index, png in enumerate(pngs, start=1):
             current = png
-            print(f"OCR {index}/{total} : {png.name}", flush=True)
+            #2ページ目以降は、ここまでの平均時間から残り時間を出す
+            remain = ""
+            if index > 1:
+                per_page = (time.perf_counter() - start) / (index - 1)
+                remain = f"   残り約 {format_elapsed(per_page * (total - index + 1))}"
+            print(f"OCR {index}/{total} : {png.name}{remain}", flush=True)
             with fitz.open(stream=ocr_page(png, ocr_lang, ocr_config), filetype="pdf") as page_pdf:
                 fix_japanese_spacing(page_pdf)
                 book.insert_pdf(page_pdf)
@@ -280,8 +285,7 @@ def merge_folder(folder: Path, lang: str, vertical_lang: str | None, no_text_pdf
             tmp.unlink()
 
     print()
-    print("DONE:")
-    print(out.name)
+    print(f"DONE: {out.name} を作成しました")
     print()
     print(f"Pages: {total}")
     print(f"Elapsed: {format_elapsed(time.perf_counter() - start)}")
@@ -313,7 +317,8 @@ def main() -> int:
     failed = [f.name for f in folders if not merge_folder(f, lang, vertical_lang, no_text_pdfs)]
 
     print("=" * 40)
-    print(f"すべて完了 ({len(folders) - len(failed)}/{len(folders)} 冊 成功)")
+    print(f"{'【完了】' if not failed else '【失敗あり】'} "
+          f"{len(folders) - len(failed)}/{len(folders)} 冊 成功")
     print(f"合計時間: {format_elapsed(time.perf_counter() - started)}")
     if no_text_pdfs:
         print()

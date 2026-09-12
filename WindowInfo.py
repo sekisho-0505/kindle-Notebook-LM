@@ -84,6 +84,31 @@ def GetWindowHandleWithName(title,name):
     EnumWindows(WNDENUMPROC(EnumWindowsProc), 0)
     return ghwnd
 
+def GetVisibleWindowHandleWithName(title, name):
+    """タイトルと実行ファイル名が一致する『表示中の』ウィンドウのうち最大のものを返す。
+
+    Kindle は非表示のまま残る古いウィンドウ(旧 Kindle for PC の Qt ウィンドウ等)を
+    持つことがあり、GetWindowHandleWithName はそれを掴んでしまう場合がある。
+    掴む相手が実行のたびに変わると、F11 やページ送りキーが本体に届かない。
+    """
+    best = None
+    best_area = -1
+    for w in GetWindowList():
+        if w['Text'].find(title) == -1:
+            continue
+        if os.path.basename(w['Location']).upper() != name.upper():
+            continue
+        hwnd = w['HWND']
+        if not windll.user32.IsWindowVisible(hwnd) or windll.user32.IsIconic(hwnd):
+            continue
+        left, top, right, bottom = GetWindowRect(hwnd)
+        area = (right - left) * (bottom - top)
+        if area > best_area:
+            best = hwnd
+            best_area = area
+    return best
+
+
 def GetWindowList():
     global windowlist
     windowlist = []

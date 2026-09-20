@@ -115,6 +115,18 @@ def GetWindowList():
     EnumWindows(WNDENUMPROC(EnumWindowsListProc), 0)
     return windowlist
 
+def IsWindowAlive(hwnd) -> bool:
+    """そのウィンドウがまだ存在し、表示されているか。
+
+    キャプチャ中の生存確認をタイトル検索でやり直すと、非表示のまま残っている
+    古いウィンドウ(旧 Kindle for PC の Qt ウィンドウ等)を掴んでしまい、
+    本体を閉じても終了できなくなる。掴んだハンドルをそのまま確認する。
+    """
+    if hwnd is None:
+        return False
+    return bool(windll.user32.IsWindow(hwnd)) and bool(windll.user32.IsWindowVisible(hwnd))
+
+
 def SetForeWindow(hwnd):
     windll.user32.SetForegroundWindow(hwnd)
 

@@ -415,6 +415,12 @@ def merge_folder(folder: Path, lang: str, vertical_lang: str | None, no_text_pdf
 
 
 def main() -> int:
+    #見出しは .bat ではなくここで出す(.bat に日本語を書くと chcp 65001 のあと
+    #cmd.exe が行の途中から読み直して壊れるため)
+    print("=" * 40)
+    print(" OCR 付き PDF を作成(文字検索できる PDF)")
+    print("=" * 40)
+    print()
     lang, vertical_lang = check_tesseract()
     base = resolve_base_dir()
     if not base.is_dir():
@@ -456,10 +462,27 @@ def main() -> int:
     return 0
 
 
+def print_result(code: int) -> None:
+    """終了結果を表示する(.bat に日本語を書くと cmd.exe が行を壊すため Python 側で出す)。"""
+    print()
+    print('-' * 40)
+    if code == 0:
+        print('[成功] 正常に終了しました。')
+    else:
+        print('[失敗] エラーで終了しました。上に出ている ERROR の行を確認してください。')
+    print()
+    print('Enter キーでこの画面を閉じます。')
+
+
 if __name__ == "__main__":
+    exit_code = 0
     try:
-        sys.exit(main())
+        exit_code = main() or 0
     except KeyboardInterrupt:
         print()
         print("中断しました。")
-        sys.exit(1)
+        exit_code = 1
+    except SystemExit as e:
+        exit_code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+    print_result(exit_code)
+    sys.exit(exit_code)

@@ -108,6 +108,7 @@ OCR を行う本体プログラムです。Python ライブラリとは別に、
 | `wxdialog.py` | タイトル入力・エラー表示のダイアログ |
 | `kindless.ini` | キャプチャ側の設定ファイル |
 | `requirements.txt` | 必要な Python ライブラリ一覧 |
+| `tests/test_capture_loop.py` | ページ送りループの自動テスト（Kindle なしで動く） |
 | `trash-can/` | 使わなくなったファイルの退避場所（削除はしない） |
 
 ---
@@ -132,6 +133,16 @@ python kindless.py my_settings.ini
 
 # OCR 付き PDF を作成
 python marge_pngs.py
+```
+
+### テスト
+
+ページ送りループには自動テストがあります。**Kindle を起動していなくても実行できます**
+（画面とキー操作を偽物に差し替えて動かすため）。`kindless.py` の `capture()` を
+変更したら、実機で試す前にこれを通してください。
+
+```bash
+python tests/test_capture_loop.py
 ```
 
 ---

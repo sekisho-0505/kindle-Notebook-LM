@@ -98,16 +98,20 @@
 ## 5. 検証のやり方
 
 ### モックテスト（実機不要）
-`capture()` のループは pyautogui と ImageGrab を差し替えれば実機なしで検証できる。
-セッション作業用ディレクトリに 16 項目のテストを作って使っていたが、**リポジトリには入れていない**。
-必要なら次の方針で作り直すこと（所要 30 分程度）。
 
-- `kindless.pag` / `kindless.ImageGrab` / `kindless.SetForeWindow` / `kindless.IsWindowAlive`
-  を偽物に差し替える
-- 偽画面はページごとに違う画像を返し、「進む向きのキー」以外では変化しないようにする
-- 見るべき点: 連続して撮れるか / 戻り値＝保存枚数か / `keyDown` を使っていないか /
-  クリックとカーソル退避をしているか / 1 枚で終わったとき 1 を返すか /
-  向きが逆でも自動で切り替わるか / `wait_until_fullscreen` と `wait_screen_stable` の挙動
+```
+python tests/test_capture_loop.py
+```
+
+`tests/test_capture_loop.py` に 16 項目ある。**Kindle が起動していなくても動く**
+（`kindless.pag` / `ImageGrab` / `SetForeWindow` / `IsWindowAlive` を偽物に差し替えるだけ）。
+終了コードは 0（全通過）か 1（失敗あり）。pytest は使っていないので依存の追加も不要。
+
+`capture()` に手を入れたら、まずこれを通すこと。ここで落ちるなら実機を触る必要はない。
+見ている内容は各項目のラベルに日本語で書いてある。
+
+偽画面（`FakeScreen`）は「進む向きのキー」以外では変化しないので、
+向きが逆のときのフォールバックもここで検証できる。
 
 ### 実機テスト（ダイアログを通さず自動化できる）
 `main()` はタイトル入力ダイアログを出すので自動化しづらいが、**`capture()` を直接呼べば不要**。
